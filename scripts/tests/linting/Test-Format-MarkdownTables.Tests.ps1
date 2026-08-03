@@ -117,6 +117,8 @@ function script:Add-TrackedFixtureFile {
 }
 
 function script:Invoke-SutInFixture {
+    # See scripts/tests/README.md#powershell-7-and-pester-gotchas for the
+    # 0-byte read, stdout flush race, and diagnostic logging patterns used below.
     param(
         [Parameter(Mandatory)] [string] $FixtureRoot,
         [switch] $Check,

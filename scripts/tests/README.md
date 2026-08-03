@@ -2,7 +2,7 @@
 title: Test Scripts
 description: Pester test runner, changed-file detection, and test directory organization
 author: HVE Core Team
-ms.date: 2026-06-24
+ms.date: 2026-08-03
 ms.topic: reference
 keywords:
   - powershell
@@ -127,6 +127,59 @@ Planner-related tests are split intentionally: rule-validator suites (state
 schema, cadence ordering, startup blocks, risk-grid grammar) live under
 `linting/` alongside other linter tests, while artifact-signing and runtime
 concerns (e.g. `Sign-PlannerArtifacts.Tests.ps1`) live under `security/`.
+
+## PowerShell 7 and Pester Gotchas
+
+These non-obvious traps have burned contributors more than once. Each has a
+recommended pattern already in use in
+`scripts/tests/linting/Test-Format-MarkdownTables.Tests.ps1`.
+
+### `Get-Content -Raw` on a 0-byte file returns `$null`
+
+In PowerShell 7, `Get-Content -Raw` on an empty file returns `$null`, not an
+empty string. `Should -Match` against `$null` fails intermittently when the
+subject under test happens to emit no output.
+
+Read the file with `[System.IO.File]::ReadAllText` behind a size guard so an
+empty file becomes `''`:
+
+```powershell
+$bytes = if (Test-Path $stdoutPath) { (Get-Item $stdoutPath).Length } else { -1 }
+$stdout = if ($bytes -gt 0) { [System.IO.File]::ReadAllText($stdoutPath) } else { '' }
+```
+
+### `Start-Process -Wait` can return before the stdout file handle flushes
+
+`Start-Process -Wait -RedirectStandardOutput` sometimes returns before the OS
+finishes flushing the redirected file handle, especially for tiny payloads
+under the Pester runspace. A subsequent read observes 0 bytes even though the
+process exited cleanly.
+
+Belt-and-suspenders: call `WaitForExit` on the returned process, check the file
+size, and re-check after a short sleep before reading:
+
+```powershell
+$proc.WaitForExit()
+$bytes = (Get-Item $stdoutPath).Length
+if ($bytes -eq 0 -and $proc.ExitCode -eq 0) {
+    Start-Sleep -Milliseconds 100
+    $bytes = (Get-Item $stdoutPath).Length
+}
+```
+
+### `[System.IO.File]::AppendAllText` inside an `It` block is unreliable
+
+Diagnostic writes to a log file with `[System.IO.File]::AppendAllText` from
+inside a Pester `It` block are sometimes silently swallowed, so in-test log
+sinks are not a reliable diagnostic channel.
+
+Use `Should -Because '<message>'` for diagnostic context. The `-Because` text
+reliably surfaces in `logs/pester-failures.json` produced by the repository's
+Pester test runner:
+
+```powershell
+$stdout | Should -Match 'formatted:' -Because "process exited $($proc.ExitCode) with $bytes bytes on stdout"
+```
 
 ## Related Documentation
 
